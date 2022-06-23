@@ -12,6 +12,17 @@ use nom::sequence::{preceded, terminated};
 
 #[cfg(test)]
 mod tests {
+    fn unwrap_error<R>(input: &str, result: nom::IResult<&str, R, VerboseError<&str>>) -> R {
+        match result {
+            Ok(r) => r.1,
+            Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => {
+                panic!("{:?}",
+                       convert_error(input, e))
+            }
+            _ => panic!("Unexpected result"),
+        }
+    }
+
     use nom::error::{convert_error, VerboseError};
 
     use crate::{edn_token, Token};
@@ -23,31 +34,34 @@ mod tests {
     }
 
     #[test]
-    fn simple_sexpr() {
-        let input = String::from("(\nnil\n(\ntrue\nfalse () ) )");
-        let result = match edn_token::<VerboseError<&str>>(&input) {
-            Ok(r) => r,
-            Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => {
-                panic!("{:?}",
-                       convert_error(input.as_str(), e))
-            }
-            _ => panic!("Unexpected result"),
-        };
-        assert_eq!(result.1, Token::List(vec![Token::Nil, Token::List(vec![Token::Boolean(true), Token::Boolean(false), Token::List(vec![])])]));
+    fn literal_token() {
+        let result = edn_token::<VerboseError<&str>>("\"hello\"");
+        let result = unwrap_error("\"hello\"", result);
+        assert_eq!(result, Token::String("hello".to_string()));
     }
 
     #[test]
-    fn two_sexpr() {
+    fn nested_lists() {
+        let input = String::from("(\nnil\n(\ntrue\nfalse () ) )");
+        let result = edn_token::<VerboseError<&str>>(&input);
+        let result = unwrap_error(&input, result);
+        assert_eq!(result, Token::List(vec![Token::Nil, Token::List(vec![Token::Boolean(true), Token::Boolean(false), Token::List(vec![])])]));
+    }
+
+    #[test]
+    fn two_lists() {
         let input = String::from("(nil nil nil) (nil nil nil)");
-        let result = match crate::parse(&input) {
-            Ok(r) => r,
-            Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => {
-                panic!("{:?}",
-                       convert_error(input.as_str(), e))
-            }
-            _ => panic!("Unexpected result"),
-        };
-        assert_eq!(result.1, vec![Token::List(vec![Token::Nil, Token::Nil, Token::Nil]), Token::List(vec![Token::Nil, Token::Nil, Token::Nil])]);
+        let result = crate::parse(&input);
+        let result = unwrap_error(&input, result);
+        assert_eq!(result, vec![Token::List(vec![Token::Nil, Token::Nil, Token::Nil]), Token::List(vec![Token::Nil, Token::Nil, Token::Nil])]);
+    }
+
+    #[test]
+        fn commented_list() {
+        let input = String::from(";(nil nil nil) (nil nil nil)");
+        let result = edn_token::<VerboseError<&str>>(&input);
+        let result = unwrap_error(&input, result);
+        assert_eq!(result, Token::Comment("(nil nil nil) (nil nil nil)".to_string()));
     }
 }
 
@@ -110,6 +124,10 @@ fn boolean<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, bool,
     // `alt` combines the two parsers. It returns the result of the first
     // successful parser, or an error
     alt((parse_true, parse_false))(input)
+}
+
+fn comment<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, &'a str, E> {
+    preceded(tag(";"), take_while(|c| c != '\n'))(input)
 }
 
 
@@ -187,6 +205,7 @@ fn edn_token<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
             map(hashmap, Token::Map),
             map(vector, Token::Vector),
             map(string, |s| Token::String(String::from(s))),
+            map(comment, |s| Token::Comment(String::from(s))),
             // map(double, Token::Number),
             map(boolean, Token::Boolean),
         )),
